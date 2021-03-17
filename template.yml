@@ -1,0 +1,199 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: react-template
+  annotations:
+    description: "Build and run a React application. For more information about using this builder image, see https://github.com/shaw-007/openshift-react.git."
+    iconClass: "icon-js"
+    tags: "react"
+    openshift.io/display-name: ReactJs
+    openshift.io/provider-display-name: Sparsha Bhattarai
+
+# Parameters
+parameters:
+
+- description:  The name of the application that will be used as a prefix for services,
+      routes, images, etc
+  displayName: Application Name
+  name: APPLICATION_NAME
+  required: true
+  value: react
+
+- description: The URL of the repository with your application source code.
+  displayName: Git Repository URL
+  name: SOURCE_REPOSITORY_URL
+  required: true
+  value: https://github.com/shaw-007/openshift-react.git
+
+- description: Set this to a branch name, tag or other ref of your repository if you are not using the default branch.
+  displayName: Git Reference
+  name: SOURCE_REPOSITORY_REF
+  required: true
+  value: main
+
+- description: Set this to the relative path of the Dockerfile for package installation.
+  displayName: Builder Dockerfile path
+  name: DOCKER_FILE_BUILDER
+  required: true
+
+- description: Set this to the relative path of the Dockerfile for building the source code.
+  displayName: App Dockerfile path
+  name: DOCKER_FILE_APP
+  required: true
+
+objects:
+
+# Application Service
+- kind: Service
+  apiVersion: v1
+  metadata:
+    name: ${APPLICATION_NAME}
+    annotations:
+        description: Exposes and load balances the application pods
+  spec:
+    ports:
+      - port: 8080
+        targetPort: 8080
+    selector:
+      name: ${APPLICATION_NAME}
+    type: ClusterIP
+    sessionAffinity: None
+
+# Application Route
+- kind: Route
+  apiVersion: v1
+  metadata:
+    name: ${APPLICATION_NAME}
+  spec:
+    to:
+      kind: Service
+      name: ${APPLICATION_NAME}
+      weight: 100
+
+
+# Builder Image
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    name: ${APPLICATION_NAME}-builder
+
+# App Image
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    name: ${APPLICATION_NAME}-app
+
+# Builder config
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    name: ${APPLICATION_NAME}-builder
+    annotations:
+        description: Defines the builder of the react app.
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${APPLICATION_NAME}-builder:latest
+    source:
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      type: Docker
+      dockerStrategy:
+        dockerfilePath: ${DOCKER_FILE_BUILDER}
+    triggers:
+      - type: ImageChange
+        imageChange: {}
+      - type: ConfigChange
+      
+# App config
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    name: ${APPLICATION_NAME}-app
+    annotations:
+        description: Defines how react app.
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${APPLICATION_NAME}-app:latest
+    source:
+      type: Git
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      images:
+      - from: 
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}-builder:latest
+        paths: 
+        - sourcePath: /app/node_modules
+          destinationDir: .
+    strategy:
+      type: Docker
+      dockerStrategy:
+        dockerfilePath: ${DOCKER_FILE_APP}
+    triggers:
+    - imageChange: {}
+      type: ImageChange
+    - type: "imageChange" 
+      imageChange:
+        from:
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}-builder:latest
+
+# App deployment config
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    name: ${APPLICATION_NAME}
+  spec:
+    strategy:
+      type: Rolling
+      rollingParams:
+        updatePeriodSeconds: 1
+        intervalSeconds: 1
+        timeoutSeconds: 600
+        maxUnavailable: 25%
+        maxSurge: 25%
+      resources: {}
+      activeDeadlineSeconds: 21600
+    triggers:
+      - type: ImageChange
+        imageChangeParams:
+          automatic: true
+          containerNames:
+            - ${APPLICATION_NAME}
+          from:
+            kind: ImageStreamTag
+            name: ${APPLICATION_NAME}-app:latest
+      - type: ConfigChange
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      name: ${APPLICATION_NAME}
+    template:
+      metadata:
+        name: ${APPLICATION_NAME}
+        labels:
+          name: ${APPLICATION_NAME}
+      spec:
+        containers:
+          - name: ${APPLICATION_NAME}
+            image: ${APPLICATION_NAME}-app:latest
+            ports:
+              - containerPort: 8080
+            resources: {}
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+            imagePullPolicy: Always
+        restartPolicy: Always
+        terminationGracePeriodSeconds: 30
+        dnsPolicy: ClusterFirst
+        securityContext: {}
+        schedulerName: default-scheduler
+
